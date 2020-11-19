@@ -97,10 +97,14 @@ app.post('/copy/:id', async (req, res) => {
       'User-Agent': 'easybox'
     }
   }).catch((err) => {
+    console.error(err)
+
     return res.status(500).send(`Unknown server error`)
   })
 
   var j = await b.json().catch((err) => {
+    console.error(err)
+    
     return res.status(500).send(`Unknown error when trying to parse JSON`)
   })
 
