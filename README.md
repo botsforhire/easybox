@@ -16,6 +16,10 @@ POST /new (send empty data) - Will return a value called ``boxID`` with the ID o
 ```
 
 ```
+POST /copy/<box_id> (send empty data) - Will return a value called ``boxID`` with the ID of your box. All data from the jsonbox provided will be copied to your box
+```
+
+```
 GET /box/<box_id> - Will return a JSON data containing all the collections in the box.
 ```
 
