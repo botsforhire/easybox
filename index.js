@@ -16,8 +16,7 @@ PUT /box/:id/:collection_name/:document_id - Update a 'document' by the ID
 
 TODO:
 
-- Encrypt the data in the mongodb database
-- Add authorization
+- Encrypt the data in the mongoDB database
 - Add homepage
 
 */
@@ -33,9 +32,9 @@ var fetch = require('node-fetch')
 var chalk = require('chalk')
 var logging = (process.env.NODE_ENV == 'production') == false
 
-async function generateHash() {
+async function generateHash(key=new Date().getTime().toString()) {
   return crypto.createHmac('sha1', process.env.HASH_KEY)
-    .update(new Date().getTime().toString())
+    .update(key)
     .digest('hex')
 }
 
@@ -47,6 +46,10 @@ async function generateID() {
 
 app.use(express.json())
 
+var stats = {
+  requestsMade: 0
+}
+
 app.use((req, res, next) => {
   if (db == null) {
     return res.status(400).send(`Easybox hasn't fully loaded yet.`)
@@ -56,6 +59,7 @@ app.use((req, res, next) => {
     console.log(chalk.green(`[${new Date().getTime()}] ${req.method} request to ${req.path}`))
   }
 
+  stats.requestsMade++
   next()
 })
 
@@ -67,22 +71,37 @@ app.get('/ping', (req, res) => {
   res.end('pong!')
 })
 
+app.get('/status', (req, res)=>{
+  res.json(stats)
+})
+
 /* Generate a new box */
 
 app.post('/new', async (req, res) => {
   var hash = await generateHash()
 
+  var requiresAuth = false
+  var auth = null
+
+  if(req.body.requiresAuth){
+    requiresAuth = true  
+    auth = await generateHash(`authorization-${new Date().getTime().toString()}${process.env.HASH_KEY}`)
+  }
+
   await db.collection('boxes').insertOne({
     boxID: hash,
     hidden: false,
-    data: {}
+    data: {},
+    requiresAuth: requiresAuth,
+    auth: auth
   })
 
   res.status(200).json({
     ok: true,
     boxID: hash,
     boxURL: `https://${req.headers['host']}/box/${hash}`,
-    createdAt: new Date().getTime()
+    createdAt: new Date().getTime(),
+    auth: auth
   })
 })
 
@@ -150,6 +169,17 @@ app.get('/box/:id', async (req, res) => {
     })
   }
 
+  if(box[0].requiresAuth){
+    var authorization = req.headers['authorization']
+
+    if(authorization != box[0].auth){
+      return res.status(403).json({
+        ok: false,
+        message: 'This box is protected. Please put your AUTH key in the Authorization header.'
+      })
+    }
+  }
+
   res.json(box[0].data)
 })
 
@@ -163,6 +193,17 @@ app.get('/box/:id/:collection_name', async (req, res) => {
     })
   }
 
+  if(box[0].requiresAuth){
+    var authorization = req.headers['authorization']
+
+    if(authorization != box[0].auth){
+      return res.status(403).json({
+        ok: false,
+        message: 'This box is protected. Please put your AUTH key in the Authorization header.'
+      })
+    }
+  }
+
   res.json(box[0].data[req.params['collection_name']] || [])
 })
 
@@ -174,6 +215,17 @@ app.post('/box/:id/:collection_name', async (req, res) => {
       ok: false,
       message: `Box not found.`
     })
+  }
+
+  if(box[0].requiresAuth){
+    var authorization = req.headers['authorization']
+
+    if(authorization != box[0].auth){
+      return res.status(403).json({
+        ok: false,
+        message: 'This box is protected. Please put your AUTH key in the Authorization header.'
+      })
+    }
   }
 
   if (Object.keys(req.body).length == 0) {
@@ -209,6 +261,17 @@ app.delete('/box/:id/:collection_name', async (req, res) => {
     })
   }
 
+  if(box[0].requiresAuth){
+    var authorization = req.headers['authorization']
+
+    if(authorization != box[0].auth){
+      return res.status(403).json({
+        ok: false,
+        message: 'This box is protected. Please put your AUTH key in the Authorization header.'
+      })
+    }
+  }
+
   box[0].data[req.params['collection_name']] = []
 
   await db.collection('boxes').updateOne({ boxID: req.params.id }, { $set: box[0] })
@@ -224,6 +287,17 @@ app.delete('/box/:id/:collection_name/:document_id', async (req, res) => {
       ok: false,
       message: `Box not found.`
     })
+  }
+
+  if(box[0].requiresAuth){
+    var authorization = req.headers['authorization']
+
+    if(authorization != box[0].auth){
+      return res.status(403).json({
+        ok: false,
+        message: 'This box is protected. Please put your AUTH key in the Authorization header.'
+      })
+    }
   }
 
   var c = box[0].data[req.params['collection_name']]
@@ -256,6 +330,17 @@ app.put('/box/:id/:collection_name/:document_id', async (req, res) => {
       ok: false,
       message: `Box not found.`
     })
+  }
+
+  if(box[0].requiresAuth){
+    var authorization = req.headers['authorization']
+
+    if(authorization != box[0].auth){
+      return res.status(403).json({
+        ok: false,
+        message: 'This box is protected. Please put your AUTH key in the Authorization header.'
+      })
+    }
   }
 
   var c = box[0].data[req.params['collection_name']]

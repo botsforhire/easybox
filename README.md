@@ -12,7 +12,7 @@ If you want to you can contribute to this to improve it. Just fork this GitHub r
 # Documentation
 
 ```
-POST /new (send empty data) - Will return a value called ``boxID`` with the ID of your box.
+POST /new (send empty data OR if you want a protected box with authorization, send { 'requiresAuth': true }) - Will return a value called ``boxID`` with the ID of your box. If you need authorization, it will also send a key. You will need to put this on the ``Authorization`` header when sending requests to your bot.
 ```
 
 ```
