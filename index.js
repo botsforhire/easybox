@@ -28,6 +28,9 @@ const crypto = require('crypto')
 var app = express()
 var db = null
 
+var getAllCached = true
+var cache = {}
+
 var fetch = require('node-fetch')
 var chalk = require('chalk')
 var logging = (process.env.NODE_ENV == 'production') == false
@@ -49,6 +52,8 @@ app.use(express.json())
 var stats = {
   requestsMade: 0
 }
+
+var cache = {}
 
 app.use((req, res, next) => {
   if (db == null) {
@@ -88,19 +93,28 @@ app.post('/new', async (req, res) => {
     auth = await generateHash(`authorization-${new Date().getTime().toString()}${process.env.HASH_KEY}`)
   }
 
-  await db.collection('boxes').insertOne({
+
+  cache[hash] = {
     boxID: hash,
     hidden: false,
     data: {},
     requiresAuth: requiresAuth,
     auth: auth
-  })
+  }
 
   res.status(200).json({
     ok: true,
     boxID: hash,
     boxURL: `https://${req.headers['host']}/box/${hash}`,
     createdAt: new Date().getTime(),
+    auth: auth
+  })
+
+  await db.collection('boxes').insertOne({
+    boxID: hash,
+    hidden: false,
+    data: {},
+    requiresAuth: requiresAuth,
     auth: auth
   })
 })
@@ -151,6 +165,12 @@ app.post('/copy/:id', async (req, res) => {
     data: data
   })
 
+  cache[hash] = {
+    boxID: hash,
+    hidden: false,
+    data: data
+  }
+
   res.status(200).json({
     ok: true,
     boxID: hash,
@@ -160,19 +180,29 @@ app.post('/copy/:id', async (req, res) => {
 })
 
 app.get('/box/:id', async (req, res) => {
-  var box = await db.collection('boxes').find({ boxID: req.params.id }).toArray()
+  var box = cache[req.params.id]
 
-  if (!box[0] || box[0].hidden) {
-    return res.status(404).json({
-      ok: false,
-      message: `Box not found.`
-    })
+  if(box){
+    box = box
+  } else {
+    var box = await db.collection('boxes').find({ boxID: req.params.id }).toArray()
+
+    if(!box[0]){
+      return res.status(404).json({
+        ok: false,
+        message: `Bot not found.`
+      })
+    }
+
+    cache[req.params.id] = box
+    box = box[0]
   }
 
-  if(box[0].requiresAuth){
+
+  if(box.requiresAuth){
     var authorization = req.headers['authorization']
 
-    if(authorization != box[0].auth){
+    if(authorization != box.auth){
       return res.status(403).json({
         ok: false,
         message: 'This box is protected. Please put your AUTH key in the Authorization header.'
@@ -180,23 +210,33 @@ app.get('/box/:id', async (req, res) => {
     }
   }
 
-  res.json(box[0].data)
+  res.json(box.data)
 })
 
 app.get('/box/:id/:collection_name', async (req, res) => {
-  var box = await db.collection('boxes').find({ boxID: req.params.id }).toArray()
+  var box = cache[req.params.id]
 
-  if (!box[0] || box[0].hidden) {
-    return res.status(404).json({
-      ok: false,
-      message: `Box not found.`
-    })
+  if(box){
+    box = box
+  } else {
+    var box = await db.collection('boxes').find({ boxID: req.params.id }).toArray()
+
+    if(!box[0]){
+      return res.status(404).json({
+        ok: false,
+        message: `Bot not found.`
+      })
+    }
+
+    cache[req.params.id] = box[0]
+    box = box[0]
   }
 
-  if(box[0].requiresAuth){
+
+  if(box.requiresAuth){
     var authorization = req.headers['authorization']
 
-    if(authorization != box[0].auth){
+    if(authorization != box.auth){
       return res.status(403).json({
         ok: false,
         message: 'This box is protected. Please put your AUTH key in the Authorization header.'
@@ -204,23 +244,33 @@ app.get('/box/:id/:collection_name', async (req, res) => {
     }
   }
 
-  res.json(box[0].data[req.params['collection_name']] || [])
+  res.json(box.data[req.params['collection_name']] || [])
 })
 
 app.post('/box/:id/:collection_name', async (req, res) => {
-  var box = await db.collection('boxes').find({ boxID: req.params.id }).toArray()
+  var box = cache[req.params.id]
 
-  if (!box[0] || box[0].hidden) {
-    return res.status(404).json({
-      ok: false,
-      message: `Box not found.`
-    })
+  if(box){
+    box = box
+  } else {
+    var box = await db.collection('boxes').find({ boxID: req.params.id }).toArray()
+
+    if(!box[0]){
+      return res.status(404).json({
+        ok: false,
+        message: `Bot not found.`
+      })
+    }
+
+    cache[req.params.id] = box[0]
+    box = box[0]
   }
 
-  if(box[0].requiresAuth){
+
+  if(box.requiresAuth){
     var authorization = req.headers['authorization']
 
-    if(authorization != box[0].auth){
+    if(authorization != box.auth){
       return res.status(403).json({
         ok: false,
         message: 'This box is protected. Please put your AUTH key in the Authorization header.'
@@ -238,7 +288,6 @@ app.post('/box/:id/:collection_name', async (req, res) => {
   var data = req.body
 
   data['_id'] = await generateID()
-  box = box[0]
 
   if (!box.data[req.params['collection_name']]) {
     box.data[req.params['collection_name']] = []
@@ -246,25 +295,37 @@ app.post('/box/:id/:collection_name', async (req, res) => {
 
   box.data[req.params['collection_name']].push(data)
 
-  await db.collection('boxes').updateOne({ boxID: req.params.id }, { $set: box })
+  cache[req.params.id] = box
 
   res.status(200).json(data)
+
+  await db.collection('boxes').updateOne({ boxID: req.params.id }, { $set: box })
 })
 
 app.delete('/box/:id/:collection_name', async (req, res) => {
-  var box = await db.collection('boxes').find({ boxID: req.params.id }).toArray()
+  var box = cache[req.params.id]
 
-  if (!box[0] || box[0].hidden) {
-    return res.status(404).json({
-      ok: false,
-      message: `Box not found.`
-    })
+  if(box){
+    box = box
+  } else {
+    var box = await db.collection('boxes').find({ boxID: req.params.id }).toArray()
+
+    if(!box[0]){
+      return res.status(404).json({
+        ok: false,
+        message: `Bot not found.`
+      })
+    }
+
+    cache[req.params.id] = box[0]
+    box = box[0]
   }
 
-  if(box[0].requiresAuth){
+
+  if(box.requiresAuth){
     var authorization = req.headers['authorization']
 
-    if(authorization != box[0].auth){
+    if(authorization != box.auth){
       return res.status(403).json({
         ok: false,
         message: 'This box is protected. Please put your AUTH key in the Authorization header.'
@@ -272,27 +333,39 @@ app.delete('/box/:id/:collection_name', async (req, res) => {
     }
   }
 
-  box[0].data[req.params['collection_name']] = []
+  box.data[req.params['collection_name']] = []
 
-  await db.collection('boxes').updateOne({ boxID: req.params.id }, { $set: box[0] })
+  cached[box] = box
 
   res.status(204).end('')
+
+  await db.collection('boxes').updateOne({ boxID: req.params.id }, { $set: box })
 })
 
 app.delete('/box/:id/:collection_name/:document_id', async (req, res) => {
-  var box = await db.collection('boxes').find({ boxID: req.params.id }).toArray()
+  var box = cache[req.params.id]
 
-  if (!box[0] || box[0].hidden) {
-    return res.status(404).json({
-      ok: false,
-      message: `Box not found.`
-    })
+  if(box){
+    box = box
+  } else {
+    var box = await db.collection('boxes').find({ boxID: req.params.id }).toArray()
+
+    if(!box[0]){
+      return res.status(404).json({
+        ok: false,
+        message: `Bot not found.`
+      })
+    }
+
+    cache[req.params.id] = box[0]
+    box = box[0]
   }
 
-  if(box[0].requiresAuth){
+
+  if(box.requiresAuth){
     var authorization = req.headers['authorization']
 
-    if(authorization != box[0].auth){
+    if(authorization != box.auth){
       return res.status(403).json({
         ok: false,
         message: 'This box is protected. Please put your AUTH key in the Authorization header.'
@@ -300,7 +373,7 @@ app.delete('/box/:id/:collection_name/:document_id', async (req, res) => {
     }
   }
 
-  var c = box[0].data[req.params['collection_name']]
+  var c = box.data[req.params['collection_name']]
 
   if (!c) {
     return res.status(404).json({
@@ -315,27 +388,39 @@ app.delete('/box/:id/:collection_name/:document_id', async (req, res) => {
     }
   }))
 
-  box[0].data[req.params['collection_name']] = c
+  box.data[req.params['collection_name']] = c
 
-  await db.collection('boxes').updateOne({ boxID: req.params.id }, { $set: box[0] })
+  cache[req.params.id] = box
 
   res.status(204).end('')
+
+  await db.collection('boxes').updateOne({ boxID: req.params.id }, { $set: box })
 })
 
 app.put('/box/:id/:collection_name/:document_id', async (req, res) => {
-  var box = await db.collection('boxes').find({ boxID: req.params.id }).toArray()
+  var box = cache[req.params.id]
 
-  if (!box[0] || box[0].hidden) {
-    return res.status(404).json({
-      ok: false,
-      message: `Box not found.`
-    })
+  if(box){
+    box = box
+  } else {
+    var box = await db.collection('boxes').find({ boxID: req.params.id }).toArray()
+
+    if(!box[0]){
+      return res.status(404).json({
+        ok: false,
+        message: `Bot not found.`
+      })
+    }
+
+    cache[req.params.id] = box[0]
+    box = box[0]
   }
 
-  if(box[0].requiresAuth){
+
+  if(box.requiresAuth){
     var authorization = req.headers['authorization']
 
-    if(authorization != box[0].auth){
+    if(authorization != box.auth){
       return res.status(403).json({
         ok: false,
         message: 'This box is protected. Please put your AUTH key in the Authorization header.'
@@ -343,7 +428,7 @@ app.put('/box/:id/:collection_name/:document_id', async (req, res) => {
     }
   }
 
-  var c = box[0].data[req.params['collection_name']]
+  var c = box.data[req.params['collection_name']]
 
   if (!c) {
     return res.status(404).json({
@@ -367,11 +452,13 @@ app.put('/box/:id/:collection_name/:document_id', async (req, res) => {
     }
   }))
 
-  box[0].data[req.params['collection_name']] = c
+  box.data[req.params['collection_name']] = c
 
-  await db.collection('boxes').updateOne({ boxID: req.params.id }, { $set: box[0] })
+  cache[req.params.id] = box
 
   res.status(200).json(req.body)
+
+  await db.collection('boxes').updateOne({ boxID: req.params.id }, { $set: box })
 })
 
 
@@ -380,4 +467,15 @@ app.listen(port, async () => {
 
   db = await database.connectDatabase()
 
+  if(getAllCached){
+    console.log(chalk.green(`Caching all...`))
+    
+    var boxes = await db.collection('boxes').find({}).toArray()
+
+    boxes.forEach((box)=>{
+      cache[box.boxID] = box
+    })
+
+    console.log(chalk.green(`Cached all!`))
+  }
 })
